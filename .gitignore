@@ -1,0 +1,16 @@
+# Carpetas de compilación de ROS 2 (NUNCA subir a Git)
+build/
+install/
+log/
+
+# Archivos compilados y caché de Python / C++
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.o
+*.a
+
+# Configuraciones locales del editor y sistema
+.vscode/
+.DS_Store
