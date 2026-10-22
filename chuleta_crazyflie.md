@@ -51,7 +51,7 @@ Opción manual (2 terminales):
 ## 🛫 Despegue y Aterrizaje
 > **`takeoff(targetHeight, duration)`**
 > Despega en línea recta y se queda flotando. 
-> *Ej: `cf.takeoff(1.0, 2.5)` -> Sube a 1 metro de altura, tardando 2.5 segundos.*
+> *Ej: `cf.take_off(1.0, 2.5)` -> Sube a 1 metro de altura, tardando 2.5 segundos.*
 
 > **`land(targetHeight, duration)`**
 > Aterriza en línea recta. (Normalmente `targetHeight` se pone a `0.0`).
