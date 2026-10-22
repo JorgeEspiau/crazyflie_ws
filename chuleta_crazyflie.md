@@ -42,3 +42,39 @@ Opción manual (2 terminales):
 
 **Parada de Emergencia:**
 > `mc.stop()` : Corta el movimiento actual instantáneamente y se queda flotando (hover).
+
+
+# 🎮 COMANDOS DE VUELO NATIVOS (Crazyswarm2 ROS 2)
+
+*Estos comandos se usan llamando al objeto de tu dron, por ejemplo: `cf.takeoff(...)`*
+
+## 🛫 Despegue y Aterrizaje
+> **`takeoff(targetHeight, duration)`**
+> Despega en línea recta y se queda flotando. 
+> *Ej: `cf.takeoff(1.0, 2.5)` -> Sube a 1 metro de altura, tardando 2.5 segundos.*
+
+> **`land(targetHeight, duration)`**
+> Aterriza en línea recta. (Normalmente `targetHeight` se pone a `0.0`).
+> *Ej: `cf.land(0.0, 3.0)` -> Baja hasta el suelo en 3 segundos.*
+
+## 🗺️ Movimiento por Coordenadas (Trayectorias suaves)
+> **`goTo(goal, yaw, duration, relative=False)`**
+> Se mueve de forma fluida a una coordenada `[x, y, z]` exacta. El dron calcula una curva suave sin tirones.
+> * **`goal`**: Array de 3 números `[x, y, z]`.
+> * **`yaw`**: Rotación sobre sí mismo en radianes.
+> * **`duration`**: Segundos que debe tardar el viaje.
+> * **`relative`**: Si es `True`, las coordenadas son desde donde está el dron ahora. Si es `False`, son coordenadas absolutas del mapa.
+> *Ej: `cf.goTo([1.0, 0.0, 0.0], 0.0, 2.0, relative=True)` -> Avanza 1 metro hacia adelante tardando 2 segundos.*
+
+## 🕹️ Control en Tiempo Real (Streaming Setpoints)
+*Ojo: Si usas estos comandos, no puedes volver a usar `goTo` o `land` sin reiniciar.*
+
+> **`cmdPosition(pos, yaw=0.0)`**
+> Le manda una coordenada absoluta `[x, y, z]` en bucle constante. Ideal si tu código calcula la posición en tiempo real.
+
+> **`cmdHover(vx, vy, yaw_rate, z_distance)`**
+> Lo controlas como un joystick. Le pasas velocidad lineal X e Y (m/s), velocidad de giro (rad/s) y la altura fija a la que debe mantenerse.
+
+## 🚨 Seguridad
+> **`emergency()`**
+> Corta la energía de los motores al instante. Cae a plomo. Úsalo solo si el dron va a chocar o hacer daño a alguien.
