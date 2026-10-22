@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crazyflie · panel de vuelo</title>
+<style>
+  :root{
+    --paper:#eef2f6; --card:#ffffff; --ink:#14213d; --mut:#5b6b88; --line:#c9d4e2;
+    --front:#ff5a1f; --real:#1c7ed6; --ok:#1f9d63; --warn:#d98a00; --bad:#d62839;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font:14px/1.4 "Avenir Next","Segoe UI","Helvetica Neue",system-ui,sans-serif;
+    display:grid; grid-template-columns:minmax(0,1fr) 340px; grid-template-rows:auto minmax(0,1fr);
+  }
+  header{grid-column:1/-1; display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--card)}
+  header h1{font-size:16px; margin:0 auto 0 0; font-weight:650; letter-spacing:.01em}
+  .pill{padding:3px 10px; border-radius:99px; border:1px solid var(--line); font-weight:600; font-size:12.5px; background:var(--paper)}
+  .pill.ok{color:var(--ok); border-color:var(--ok)}
+  .pill.warn{color:var(--warn); border-color:var(--warn)}
+  .pill.bad{color:#fff; background:var(--bad); border-color:var(--bad)}
+  #stage{position:relative; min-height:0}
+  #view{position:absolute; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none}
+  #view:active{cursor:grabbing}
+  .tools{position:absolute; left:12px; top:12px; display:flex; gap:6px; flex-wrap:wrap}
+  .tools button{font:inherit; font-size:12.5px; padding:5px 10px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:6px; cursor:pointer}
+  .tools button:hover{border-color:var(--ink)}
+  .tools button[aria-pressed="true"]{background:var(--ink); color:#fff; border-color:var(--ink)}
+  .tools button:focus-visible{outline:2px solid var(--real); outline-offset:2px}
+  .legend{position:absolute; left:12px; bottom:12px; font-size:12px; color:var(--mut); display:flex; gap:14px; background:rgba(255,255,255,.8); padding:5px 10px; border-radius:6px}
+  .legend i{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px}
+  aside{border-left:1px solid var(--line); background:var(--card); overflow:auto; padding:14px; display:flex; flex-direction:column; gap:16px}
+  aside h2{font-size:13px; margin:0 0 6px; font-weight:650; color:var(--mut)}
+  .now{border:1px solid var(--ink); border-radius:10px; padding:10px 12px}
+  .now b{font-size:18px; display:block; min-height:26px}
+  .bar{height:5px; background:var(--paper); border-radius:3px; margin-top:8px; overflow:hidden}
+  .bar>div{height:100%; width:0; background:var(--front)}
+  .now small{color:var(--mut); font-variant-numeric:tabular-nums}
+  table{width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums}
+  th,td{padding:4px 0; text-align:right; border-bottom:1px solid var(--paper)}
+  th:first-child,td:first-child{text-align:left; color:var(--mut)}
+  th{font-weight:600; font-size:12px; color:var(--mut)}
+  td.r{color:var(--real)}
+  .keys{display:grid; grid-template-columns:repeat(8,1fr); gap:4px}
+  .k{border:1px solid var(--line); border-radius:5px; text-align:center; padding:6px 0; font-size:12px; font-weight:600; color:var(--mut); transition:background .08s}
+  .k.on{background:var(--front); color:#fff; border-color:var(--front)}
+  .k.q.on{background:var(--bad); border-color:var(--bad)}
+  .k.sp{grid-column:span 3}
+  .k.sp2{grid-column:span 2}
+  .k.e{visibility:hidden}
+  #map{width:100%; aspect-ratio:1; border:1px solid var(--line); border-radius:10px; background:var(--paper); display:block}
+  ul#log{list-style:none; margin:0; padding:0; font-size:13px}
+  #log li{display:flex; gap:8px; padding:3px 0; border-bottom:1px solid var(--paper)}
+  #log time{color:var(--mut); font-variant-numeric:tabular-nums}
+  #log li.bad{color:var(--bad); font-weight:600}
+  @media (max-width:820px){
+    body{grid-template-columns:1fr; grid-template-rows:auto 60vh auto; height:auto}
+    aside{border-left:0; border-top:1px solid var(--line)}
+  }
+  @media (prefers-reduced-motion:reduce){ .k{transition:none} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Crazyflie · panel de vuelo</h1>
+  <span class="pill" id="conn">Sin conexión con el nodo</span>
+  <span class="pill" id="state">—</span>
+</header>
+
+<section id="stage">
+  <canvas id="view" aria-label="Vista 3D del dron"></canvas>
+  <div class="tools">
+    <button id="bFollow" aria-pressed="false">Seguir al dron</button>
+    <button id="bTrail">Borrar estela</button>
+    <button id="bReset">Restablecer cámara</button>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--front)"></i>Comandado (lo que pides)</span>
+    <span><i style="background:var(--real)"></i>Real (sensores del dron)</span>
+  </div>
+</section>
+
+<aside>
+  <div class="now">
+    <h2>Moviéndose ahora</h2>
+    <b id="nowLabel">Parado</b>
+    <div class="bar"><div id="nowBar"></div></div>
+    <small id="nowSpeed">0.00 m/s · 0°/s</small>
+  </div>
+
+  <div>
+    <h2>Posición (origen = punto de despegue)</h2>
+    <table>
+      <thead><tr><th></th><th>Comandado</th><th>Real</th></tr></thead>
+      <tbody>
+        <tr><td>X (delante)</td><td id="cx">0.00 m</td><td class="r" id="rx">—</td></tr>
+        <tr><td>Y (izquierda)</td><td id="cy">0.00 m</td><td class="r" id="ry">—</td></tr>
+        <tr><td>Altura</td><td id="cz">0.00 m</td><td class="r" id="rz">—</td></tr>
+        <tr><td>Giro (yaw)</td><td id="cyaw">0°</td><td class="r" id="ryaw">—</td></tr>
+        <tr><td>Batería</td><td></td><td class="r" id="rbat">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    <h2>Teclas</h2>
+    <div class="keys">
+      <div class="k e"></div><div class="k" data-k="w">W</div><div class="k e"></div>
+      <div class="k" data-k="up">↑</div><div class="k" data-k="down">↓</div>
+      <div class="k e"></div><div class="k e"></div><div class="k e"></div>
+      <div class="k" data-k="a">A</div><div class="k" data-k="s">S</div><div class="k" data-k="d">D</div>
+      <div class="k" data-k="left">←</div><div class="k" data-k="right">→</div>
+      <div class="k e"></div><div class="k e"></div><div class="k e"></div>
+      <div class="k sp" data-k="space">Espacio</div>
+      <div class="k sp2 q" data-k="q">Q · parar</div>
+    </div>
+  </div>
+
+  <div>
+    <h2>Vista desde arriba</h2>
+    <canvas id="map"></canvas>
+  </div>
+
+  <div>
+    <h2>Historial</h2>
+    <ul id="log"></ul>
+  </div>
+</aside>
+
+<script>
+const URL_EVENTOS = 'http://localhost:8765/events';
+const STATES = {connecting:['Conectando…','warn'], ground:['En tierra',''], takeoff:['Despegando','ok'],
+  flying:['En vuelo','ok'], landing:['Aterrizando','warn'], emergency:['EMERGENCIA','bad']};
+
+// ---------- estado ----------
+const S = {x:0,y:0,z:0,yaw:0};         // pose mostrada (comandada)
+let anim=null, fall=null, state='connecting';
+let tele=null, teleT=0;
+const trail=[]; const keyUntil={};
+let spin=0, spinV=0, speed=0, yawRate=0;
+const cam={yaw:1.05, pitch:0.62, d:4.4};
+const cen={x:0,y:0}; let follow=false;
+
+const $=id=>document.getElementById(id);
+function setState(s){
+  if(anim && (s==='ground'||s==='flying')){ Object.assign(S,anim.to); anim=null; }  // el nodo confirma: nos ajustamos
+  state=s; const [t,c]=STATES[s]||[s,'']; const el=$('state'); el.textContent=t; el.className='pill '+c;
+}
+function addLog(txt,bad){
+  const li=document.createElement('li'); if(bad) li.className='bad';
+  const t=new Date().toLocaleTimeString('es-ES',{hour12:false});
+  li.innerHTML='<time>'+t+'</time><span></span>'; li.lastChild.textContent=txt;
+  const ul=$('log'); ul.prepend(li); while(ul.children.length>8) ul.lastChild.remove();
+}
+
+// ---------- conexión con el nodo ----------
+const es=new EventSource(URL_EVENTOS);
+es.onopen=()=>{const c=$('conn'); c.textContent='Nodo conectado'; c.className='pill ok';};
+es.onerror=()=>{const c=$('conn'); c.textContent='Sin conexión con el nodo'; c.className='pill bad';};
+es.onmessage=e=>handle(JSON.parse(e.data));
+
+function handle(m){
+  const now=performance.now();
+  switch(m.type){
+    case 'snapshot': Object.assign(S,m.pose); anim=null; fall=null; setState(m.state); break;
+    case 'cmd':
+      anim={from:{...S}, to:m.to, t0:now, dur:Math.max(m.dur,0.05)*1000, label:m.label};
+      fall=null; setState(m.state);
+      keyUntil[m.key]=now+Math.max(m.dur*1000,350); addLog(m.label); break;
+    case 'state': setState(m.state); break;
+    case 'emergency':
+      anim=null; fall={t0:now,z0:S.z}; setState('emergency');
+      keyUntil.q=now+1500; addLog(m.label,true); break;
+    case 'tele': tele=m; teleT=now; break;
+  }
+}
+
+// ---------- cámara y proyección ----------
+const cv=$('view'), ctx=cv.getContext('2d'); let W=1,H=1;
+function resize(){const r=cv.getBoundingClientRect(),d=devicePixelRatio||1; W=r.width;H=r.height; cv.width=W*d;cv.height=H*d; ctx.setTransform(d,0,0,d,0,0);}
+new ResizeObserver(resize).observe(cv);
+
+function P3(x,y,z){
+  x-=cen.x; y-=cen.y;
+  const c=Math.cos(cam.yaw), s=Math.sin(cam.yaw);
+  const xr=x*c-y*s, yr=x*s+y*c, zz=z-0.25;
+  const cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+  const up=zz*cp+yr*sp, depth=yr*cp-zz*sp+cam.d;
+  if(depth<0.4) return null;
+  const f=Math.min(W,H*1.25)*1.15, sc=f/depth;
+  return [W/2+xr*sc, H*0.56-up*sc, sc];
+}
+function line3(a,b,col,w,dash){
+  const p=P3(...a), q=P3(...b); if(!p||!q) return;
+  ctx.strokeStyle=col; ctx.lineWidth=w; ctx.setLineDash(dash||[]);
+  ctx.beginPath(); ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]); ctx.stroke(); ctx.setLineDash([]);
+}
+function poly3(pts,fill,stroke,w,dash){
+  const q=pts.map(p=>P3(...p)); if(q.some(v=>!v)) return;
+  ctx.beginPath(); q.forEach((v,i)=>i?ctx.lineTo(v[0],v[1]):ctx.moveTo(v[0],v[1])); ctx.closePath();
+  if(fill){ctx.fillStyle=fill; ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke; ctx.lineWidth=w||1; ctx.setLineDash(dash||[]); ctx.stroke(); ctx.setLineDash([]);}
+}
+function circle3(c,r,fill,stroke,w,dash){
+  const pts=[]; for(let i=0;i<24;i++){const a=i/24*Math.PI*2; pts.push([c[0]+r*Math.cos(a),c[1]+r*Math.sin(a),c[2]]);}
+  poly3(pts,fill,stroke,w,dash);
+}
+
+function drawFloor(){
+  const step=0.5,N=7, gx=Math.round(cen.x/step)*step, gy=Math.round(cen.y/step)*step;
+  for(let i=-N;i<=N;i++){
+    const a=gx+i*step, b=gy+i*step;
+    const major=Math.abs(a-Math.round(a))<1e-6, majorB=Math.abs(b-Math.round(b))<1e-6;
+    line3([a,gy-N*step,0],[a,gy+N*step,0],major?'#b3c1d4':'#d7dfea',major?1.2:1);
+    line3([gx-N*step,b,0],[gx+N*step,b,0],majorB?'#b3c1d4':'#d7dfea',majorB?1.2:1);
+  }
+  // ejes del origen
+  line3([0,0,0],[0.5,0,0],'#14213d',2.5); line3([0,0,0],[0,0.5,0],'#14213d',2.5);
+  const lx=P3(0.58,0,0), ly=P3(0,0.58,0), lo=P3(0,0,0);
+  ctx.fillStyle='#14213d'; ctx.font='600 12px system-ui,sans-serif'; ctx.textAlign='center';
+  if(lx) ctx.fillText('x · delante',lx[0],lx[1]); if(ly) ctx.fillText('y · izq.',ly[0],ly[1]);
+  if(lo){ctx.beginPath();ctx.arc(lo[0],lo[1],4,0,7);ctx.fill();}
+}
+
+function bodyPt(P,bx,by,bz){const a=P.yaw*Math.PI/180,c=Math.cos(a),s=Math.sin(a); return [P.x+bx*c-by*s, P.y+bx*s+by*c, P.z+bz];}
+
+function drawDrone(P,ghost){
+  const d=0.075, r=0.06, motors=[[1,1,1],[1,-1,1],[-1,1,0],[-1,-1,0]];
+  const col=ghost?'#1c7ed6':'#14213d', dash=ghost?[5,4]:null, lw=ghost?1.6:3;
+  if(!ghost){   // sombra y línea de altura
+    const g={...P,z:0};
+    for(const m of motors) circle3(bodyPt(g,m[0]*d,m[1]*d,0),r,'rgba(20,33,61,.16)');
+    line3([P.x,P.y,0],[P.x,P.y,P.z],'#ff5a1f',1.2,[3,3]);
+  }
+  for(const m of motors){
+    const c=bodyPt(P,m[0]*d,m[1]*d,0);
+    line3(bodyPt(P,0,0,0),c,col,lw,dash);
+  }
+  poly3([bodyPt(P,.04,.04,0),bodyPt(P,.04,-.04,0),bodyPt(P,-.04,-.04,0),bodyPt(P,-.04,.04,0)],ghost?null:'#14213d',col,1.5,dash);
+  // flecha de frente
+  poly3([bodyPt(P,.11,0,0),bodyPt(P,.05,.03,0),bodyPt(P,.05,-.03,0)],ghost?null:'#ff5a1f',ghost?'#1c7ed6':null,1.5,dash);
+  for(const m of motors){
+    const c=bodyPt(P,m[0]*d,m[1]*d,0.012), front=m[2];
+    const pc=ghost?'#1c7ed6':(front?'#ff5a1f':'#14213d');
+    circle3(c,r,(!ghost&&spinV>8)?(front?'rgba(255,90,31,.14)':'rgba(20,33,61,.10)'):null,pc,ghost?1.2:1.6,dash);
+    if(!ghost){
+      const a0=spin*(m[0]*m[1]>0?1:-1);
+      for(let k=0;k<2;k++){
+        const a=a0+k*Math.PI;
+        line3(c,[c[0]+r*Math.cos(a),c[1]+r*Math.sin(a),c[2]],pc,2.2);
+      }
+    }
+  }
+}
+
+function drawTrail(){
+  if(trail.length<2) return;
+  const q=trail.map(p=>P3(p[0],p[1],p[2]));
+  ctx.strokeStyle='rgba(255,90,31,.7)'; ctx.lineWidth=2; ctx.beginPath(); let on=false;
+  q.forEach(v=>{ if(!v){on=false;return;} if(!on){ctx.moveTo(v[0],v[1]);on=true;} else ctx.lineTo(v[0],v[1]); });
+  ctx.stroke();
+  const f=trail.map(p=>P3(p[0],p[1],0)); ctx.strokeStyle='rgba(20,33,61,.18)'; ctx.lineWidth=1.5; ctx.beginPath(); on=false;
+  f.forEach(v=>{ if(!v){on=false;return;} if(!on){ctx.moveTo(v[0],v[1]);on=true;} else ctx.lineTo(v[0],v[1]); });
+  ctx.stroke();
+}
+
+// ---------- minimapa (vista cenital) ----------
+const mv=$('map'), mx=mv.getContext('2d');
+function drawMap(){
+  const r=mv.getBoundingClientRect(), d=devicePixelRatio||1;
+  if(mv.width!==Math.round(r.width*d)){mv.width=r.width*d; mv.height=r.height*d;}
+  mx.setTransform(d,0,0,d,0,0);
+  const w=r.width,h=r.height; mx.clearRect(0,0,w,h);
+  let ext=1.2; for(const p of trail) ext=Math.max(ext,Math.abs(p[0]),Math.abs(p[1])); ext=Math.max(ext,Math.abs(S.x),Math.abs(S.y)); ext*=1.25;
+  const sc=(Math.min(w,h)/2)/ext, X=(wy)=>w/2-wy*sc, Y=(wx)=>h/2-wx*sc;
+  mx.strokeStyle='#d7dfea'; mx.lineWidth=1;
+  for(let m=-Math.floor(ext);m<=Math.floor(ext);m++){
+    mx.beginPath(); mx.moveTo(X(-ext),Y(m)); mx.lineTo(X(ext),Y(m)); mx.stroke();
+    mx.beginPath(); mx.moveTo(X(m),Y(-ext)); mx.lineTo(X(m),Y(ext)); mx.stroke();
+  }
+  mx.strokeStyle='#14213d'; mx.lineWidth=1.5; mx.beginPath(); mx.moveTo(X(0),Y(-ext)); mx.lineTo(X(0),Y(ext)); mx.moveTo(X(-ext),Y(0)); mx.lineTo(X(ext),Y(0)); mx.stroke();
+  mx.fillStyle='#5b6b88'; mx.font='11px system-ui'; mx.fillText('delante ↑',6,14); mx.fillText('1 m = '+Math.round(sc)+' px',6,h-6);
+  mx.strokeStyle='rgba(255,90,31,.7)'; mx.lineWidth=2; mx.beginPath();
+  trail.forEach((p,i)=>i?mx.lineTo(X(p[1]),Y(p[0])):mx.moveTo(X(p[1]),Y(p[0]))); mx.stroke();
+  const arrow=(P,fill,stroke)=>{
+    const a=P.yaw*Math.PI/180, f=[Math.cos(a),Math.sin(a)], l=[-Math.sin(a),Math.cos(a)], s=0.14;
+    const pts=[[P.x+f[0]*s,P.y+f[1]*s],[P.x-f[0]*s*.7+l[0]*s*.7,P.y-f[1]*s*.7+l[1]*s*.7],[P.x-f[0]*s*.7-l[0]*s*.7,P.y-f[1]*s*.7-l[1]*s*.7]];
+    mx.beginPath(); pts.forEach((p,i)=>i?mx.lineTo(X(p[1]),Y(p[0])):mx.moveTo(X(p[1]),Y(p[0]))); mx.closePath();
+    if(fill){mx.fillStyle=fill; mx.fill();} if(stroke){mx.strokeStyle=stroke; mx.lineWidth=1.6; mx.stroke();}
+  };
+  if(tele && performance.now()-teleT<1500) arrow(tele,null,'#1c7ed6');
+  arrow(S,'#ff5a1f',null);
+}
+
+// ---------- bucle principal ----------
+let last=performance.now(), lastTrail=null;
+function tick(now){
+  const dt=Math.min(0.1,(now-last)/1000)||0.016; last=now;
+  const prev={...S};
+  if(anim){
+    const k=Math.min(1,(now-anim.t0)/anim.dur);
+    for(const q of ['x','y','z','yaw']) S[q]=anim.from[q]+(anim.to[q]-anim.from[q])*k;
+    $('nowLabel').textContent=anim.label; $('nowBar').style.width=(k*100)+'%';
+    if(k>=1) anim=null;
+  } else if(fall){
+    const t=(now-fall.t0)/1000; S.z=Math.max(0,fall.z0-4.905*t*t);
+    $('nowLabel').textContent='Caída libre · motores cortados'; $('nowBar').style.width='100%';
+  } else { $('nowLabel').textContent=state==='flying'?'Flotando (hover)':'Parado'; $('nowBar').style.width='0'; }
+
+  // velocidad instantánea suavizada
+  const sp=Math.hypot(S.x-prev.x,S.y-prev.y,S.z-prev.z)/dt, yr=Math.abs(S.yaw-prev.yaw)/dt;
+  speed+=(sp-speed)*Math.min(1,dt*8); yawRate+=(yr-yawRate)*Math.min(1,dt*8);
+  $('nowSpeed').textContent=speed.toFixed(2)+' m/s · '+Math.round(yawRate)+'°/s';
+
+  // hélices
+  const target=(state==='takeoff'||state==='flying'||state==='landing')?45:0;
+  spinV+=(target-spinV)*Math.min(1,dt*(target?3:6)); spin+=spinV*dt;
+
+  // estela
+  if(!lastTrail||Math.hypot(S.x-lastTrail[0],S.y-lastTrail[1],S.z-lastTrail[2])>0.01){
+    lastTrail=[S.x,S.y,S.z]; trail.push(lastTrail); if(trail.length>900) trail.shift();
+  }
+
+  // cámara
+  const tx=follow?S.x:0, ty=follow?S.y:0; cen.x+=(tx-cen.x)*Math.min(1,dt*6); cen.y+=(ty-cen.y)*Math.min(1,dt*6);
+
+  ctx.clearRect(0,0,W,H);
+  drawFloor(); drawTrail();
+  const realOk=tele&&now-teleT<1500;
+  if(realOk) drawDrone(tele,true);
+  drawDrone(S,false);
+  drawMap();
+
+  // paneles numéricos
+  const wrap=a=>{a=((a+180)%360+360)%360-180; return Math.round(a)};
+  $('cx').textContent=S.x.toFixed(2)+' m'; $('cy').textContent=S.y.toFixed(2)+' m';
+  $('cz').textContent=S.z.toFixed(2)+' m'; $('cyaw').textContent=wrap(S.yaw)+'°';
+  $('rx').textContent=realOk?tele.x.toFixed(2)+' m':'—'; $('ry').textContent=realOk?tele.y.toFixed(2)+' m':'—';
+  $('rz').textContent=realOk?tele.z.toFixed(2)+' m':'—'; $('ryaw').textContent=realOk?wrap(tele.yaw)+'°':'—';
+  $('rbat').textContent=realOk?tele.vbat.toFixed(2)+' V':'—';
+  document.querySelectorAll('.k[data-k]').forEach(el=>el.classList.toggle('on',(keyUntil[el.dataset.k]||0)>now));
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---------- interacción ----------
+let drag=null;
+cv.addEventListener('pointerdown',e=>{drag=[e.clientX,e.clientY]; cv.setPointerCapture(e.pointerId);});
+cv.addEventListener('pointermove',e=>{ if(!drag) return;
+  cam.yaw-=(e.clientX-drag[0])*0.008; cam.pitch=Math.max(0.15,Math.min(1.45,cam.pitch+(e.clientY-drag[1])*0.006)); drag=[e.clientX,e.clientY];});
+cv.addEventListener('pointerup',()=>drag=null);
+cv.addEventListener('wheel',e=>{e.preventDefault(); cam.d=Math.max(1.5,Math.min(10,cam.d*Math.exp(e.deltaY*0.001)));},{passive:false});
+$('bFollow').onclick=e=>{follow=!follow; e.target.setAttribute('aria-pressed',follow);};
+$('bTrail').onclick=()=>{trail.length=0; lastTrail=null;};
+$('bReset').onclick=()=>{cam.yaw=1.05; cam.pitch=0.62; cam.d=4.4;};
+</script>
+</body>
+</html>
