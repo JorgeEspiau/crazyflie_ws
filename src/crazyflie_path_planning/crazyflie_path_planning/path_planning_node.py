@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import rclpy
+import rclpy   
 from rclpy.node import Node
 
 # Importar mensajes estándar de ROS2
