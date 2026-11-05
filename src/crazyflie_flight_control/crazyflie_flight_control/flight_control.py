@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 flight_control.py  -  Persona 1: control de vuelo y estabilización (Crazyflie 2.1)
+Compatible con Node 3 (Exploración) y Node 5 (Planificación)
 """
 
 import math
@@ -183,7 +184,7 @@ class FlightControlNode(Node):
             self.declare_parameter('pid.' + n, v)
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
-        # REAJUSTE DE TOPICOS AQUI
+        # REAJUSTE DE TÓPICOS PARA NODO 3 Y NODO 5
         self.pub_estado = self.create_publisher(String, '/estado_vuelo', 10)
         self.create_subscription(
             Twist, self.get_parameter('topic_cmd_vel').value, self._cb_cmd_vel, 10)
@@ -204,8 +205,8 @@ class FlightControlNode(Node):
     def _declarar_parametros(self):
         d = self.declare_parameter
         d('uri', 'radio://0/80/2M/E7E7E7E7AA')
-        d('topic_cmd_vel', '/cmd_vel')
-        d('topic_goal_pose', '/objetivo_vuelo') # REAJUSTADO
+        d('topic_cmd_vel', '/crazyflie/cmd_vel') # REAJUSTADO PARA EL NODO 3 (Exploración)
+        d('topic_goal_pose', '/objetivo_vuelo')  # MANTIENE EL DEL NODO 5 (Planificación)
         d('control_rate_hz', 20.0)
         d('takeoff_height', 0.5)
         d('takeoff_duration', 2.5)
