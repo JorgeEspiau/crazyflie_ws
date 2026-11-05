@@ -1,80 +1,201 @@
-import time
+import sys
+import termios
+import tty
+import math
+
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped
 
 import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
-from cflib.positioning.motion_commander import MotionCommander
 from cflib.crazyflie.log import LogConfig
+from cflib.positioning.motion_commander import MotionCommander
 
-# Tu matrícula exacta fichada en el laboratorio
 URI = 'radio://0/80/2M/E7E7E7E7AA'
 
+MENU_HACKER = """
+\033[1;35m🕹️ TERMINAL DE VUELO + RVIZ2 + SENSORES Y ÁNGULOS 🕹️\033[0m
+-----------------------------------------
+[\033[1;32mESPACIO\033[0m] : Despegar / Aterrizar
+[\033[1;36mW/S/A/D\033[0m] : Moverse en horizontal (20 cm)
+[\033[1;33m↑ / ↓\033[0m]   : Subir / Bajar altura (10 cm)
+[\033[1;33m← / →\033[0m]   : Rotar sobre sí mismo (45 grados)
+[\033[1;31mQ\033[0m]       : PARADA DE EMERGENCIA (Caída libre)
+[CTRL+C]  : Salir y aterrizar
+-----------------------------------------
+"""
 
 class NodoPiloto(Node):
     def __init__(self):
         super().__init__('nodo_piloto')
-        cflib.crtp.init_drivers()
-        self.get_logger().info(f'Conectando al Crazyflie en {URI} para telemetría...')
+        self.pub_pose = self.create_publisher(PoseStamped, '/crazyflie/pose', 10)
+        # Guardamos los ángulos aquí para poder imprimirlos junto con los láseres
+        self.roll = 0.0
+        self.pitch = 0.0
+        self.yaw = 0.0
 
-        with SyncCrazyflie(URI, cf=Crazyflie()) as scf:
-            self.get_logger().info('¡Conectado! Configurando canales de sensores...')
+def euler_a_cuaternion(roll, pitch, yaw):
+    r = math.radians(roll)
+    p = math.radians(pitch)
+    y = math.radians(yaw)
+    
+    cr = math.cos(r * 0.5)
+    sr = math.sin(r * 0.5)
+    cp = math.cos(p * 0.5)
+    sp = math.sin(p * 0.5)
+    cy = math.cos(y * 0.5)
+    sy = math.sin(y * 0.5)
+    
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    qw = cr * cp * cy + sr * sp * sy
+    
+    return qx, qy, qz, qw
 
-            # Configuramos el paquete de log para leer cada 200 ms (5 veces por segundo)
-            log_conf = LogConfig(name='SensoresVuelo', period_in_ms=200)
-            log_conf.add_variable('kalman.stateZ', 'float')   # Altura estimada (metros)
-            log_conf.add_variable('pm.vbat', 'float')         # Voltaje de la batería
-            log_conf.add_variable('stabilizer.roll', 'float') # Inclinación lateral
-            log_conf.add_variable('stabilizer.pitch', 'float')# Inclinación frontal
-            log_conf.add_variable('stabilizer.yaw', 'float')  # Giro de orientación
-
-            scf.cf.log.add_config(log_conf)
-            log_conf.data_received_cb.add_callback(self.sensor_callback)
-
-            # Arrancamos el flujo de datos por radio
-            log_conf.start()
-            self.get_logger().info('Iniciando secuencia de despegue suave y lectura...')
-
-            with MotionCommander(scf, default_height=0.2) as mc:
-                time.sleep(1.0)
-                
-                self.get_logger().info('--- SUBIENDO DESPACITO (0.1 m/s) ---')
-                mc.up(0.3, velocity=0.1)
-                time.sleep(2.0)
-                
-                self.get_logger().info('--- BAJANDO DESPACITO (0.1 m/s) ---')
-                mc.down(0.3, velocity=0.1)
-                time.sleep(1.5)
-
-            # Detenemos los sensores al terminar el vuelo
-            log_conf.stop()
-            self.get_logger().info('¡Vuelo y telemetría completados con éxito!')
-
-    def sensor_callback(self, timestamp, data, logconf):
-        # Capturamos los valores que van llegando por radio
-        altura = data.get('kalman.stateZ', 0.0)
-        vbat = data.get('pm.vbat', 0.0)
-        roll = data.get('stabilizer.roll', 0.0)
-        pitch = data.get('stabilizer.pitch', 0.0)
-        yaw = data.get('stabilizer.yaw', 0.0)
-
-        # Imprimimos en la terminal con formato limpio y colores fucsias/verdes a juego con tu setup
-        print(
-            f"\033[1;35m[TELEMETRÍA]\033[0m "
-            f"Alt: \033[1;32m{altura:.3f} m\033[0m | "
-            f"Bat: \033[1;33m{vbat:.2f} V\033[0m | "
-            f"Roll: {roll:6.2f}° | "
-            f"Pitch: {pitch:6.2f}° | "
-            f"Yaw: {yaw:6.2f}°"
-        )
-
+def get_key(settings):
+    tty.setraw(sys.stdin.fileno())
+    key = sys.stdin.read(1)
+    if key == '\x1b':
+        key += sys.stdin.read(2)
+    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+    return key
 
 def main(args=None):
     rclpy.init(args=args)
+    cflib.crtp.init_drivers()
+    
+    settings = termios.tcgetattr(sys.stdin)
     nodo = NodoPiloto()
-    rclpy.shutdown()
+    
+    print(f"\n\033[1;33mConectando a {URI}...\033[0m")
+    
+    with SyncCrazyflie(URI, cf=Crazyflie()) as scf:
+        print("\033[1;32m¡Enlace de radio establecido!\033[0m")
+        print(MENU_HACKER)
+        
+        # --- 1. CONFIGURACIÓN DE TELEMETRÍA PARA RVIZ2 Y ÁNGULOS ---
+        logconf_pose = LogConfig(name='Pose', period_in_ms=100)
+        logconf_pose.add_variable('stateEstimate.x', 'float')
+        logconf_pose.add_variable('stateEstimate.y', 'float')
+        logconf_pose.add_variable('stateEstimate.z', 'float')
+        logconf_pose.add_variable('stateEstimate.roll', 'float')
+        logconf_pose.add_variable('stateEstimate.pitch', 'float')
+        logconf_pose.add_variable('stateEstimate.yaw', 'float')
+        
+        def on_pose_data(timestamp, data, _cfg):
+            # Actualizamos los ángulos internos del nodo para la consola
+            nodo.roll = data['stateEstimate.roll']
+            nodo.pitch = data['stateEstimate.pitch']
+            nodo.yaw = data['stateEstimate.yaw']
+            
+            msg = PoseStamped()
+            msg.header.stamp = nodo.get_clock().now().to_msg()
+            msg.header.frame_id = "world"
+            
+            msg.pose.position.x = data['stateEstimate.x']
+            msg.pose.position.y = data['stateEstimate.y']
+            msg.pose.position.z = data['stateEstimate.z']
+            
+            qx, qy, qz, qw = euler_a_cuaternion(nodo.roll, nodo.pitch, nodo.yaw)
+            msg.pose.orientation.x = qx
+            msg.pose.orientation.y = qy
+            msg.pose.orientation.z = qz
+            msg.pose.orientation.w = qw
+            
+            nodo.pub_pose.publish(msg)
+            
+        scf.cf.log.add_config(logconf_pose)
+        logconf_pose.data_received_cb.add_callback(on_pose_data)
+        logconf_pose.start()
+        
+        # --- 2. CONFIGURACIÓN DE SENSORES LÁSER (MULTIRANGER) ---
+        logconf_sensores = LogConfig(name='Multiranger', period_in_ms=100)
+        logconf_sensores.add_variable('range.front', 'uint16_t')
+        logconf_sensores.add_variable('range.back', 'uint16_t')
+        logconf_sensores.add_variable('range.left', 'uint16_t')
+        logconf_sensores.add_variable('range.right', 'uint16_t')
+        logconf_sensores.add_variable('range.up', 'uint16_t')
+        
+        def on_sensores_data(timestamp, data, _cfg):
+            frente = data['range.front']
+            atras = data['range.back']
+            izq = data['range.left']
+            der = data['range.right']
+            arriba = data['range.up']
+            
+            # Imprimimos los ángulos del dron y las distancias láser en una sola línea fluida
+            sys.stdout.write(f"\r\033[K[Ángulos] R:{nodo.roll:6.1f} P:{nodo.pitch:6.1f} Y:{nodo.yaw:6.1f} | [Láser] F:{frente:4} A:{atras:4} I:{izq:4} D:{der:4} Ar:{arriba:4}")
+            sys.stdout.flush()
 
+        scf.cf.log.add_config(logconf_sensores)
+        logconf_sensores.data_received_cb.add_callback(on_sensores_data)
+        logconf_sensores.start()
+        
+        mc = MotionCommander(scf)
+        volando = False
+        
+        try:
+            while True:
+                key = get_key(settings)
+                print("") 
+                
+                if key == ' ':
+                    if not volando:
+                        print("\033[1;32m🚀 [ESPACIO] Despegando a 40 cm...\033[0m")
+                        mc.take_off(height=0.4, velocity=0.2)
+                        volando = True
+                    else:
+                        print("\033[1;33m🛬 [ESPACIO] Aterrizando suavemente...\033[0m")
+                        mc.land()
+                        volando = False
+                        
+                elif key.lower() == 'w' and volando:
+                    print("⬆️  Avanzando 20 cm...")
+                    mc.forward(0.2, velocity=0.2)
+                elif key.lower() == 's' and volando:
+                    print("⬇️  Retrocediendo 20 cm...")
+                    mc.back(0.2, velocity=0.2)
+                elif key.lower() == 'a' and volando:
+                    print("⬅️  Desplazamiento izquierdo 20 cm...")
+                    mc.left(0.2, velocity=0.2)
+                elif key.lower() == 'd' and volando:
+                    print("➡️  Desplazamiento derecho 20 cm...")
+                    mc.right(0.2, velocity=0.2)
+                elif key == '\x1b[A' and volando:
+                    print("🔼 Subiendo 10 cm...")
+                    mc.up(0.1, velocity=0.2)
+                elif key == '\x1b[B' and volando:
+                    print("🔽 Bajando 10 cm...")
+                    mc.down(0.1, velocity=0.2)
+                elif key == '\x1b[D' and volando:
+                    print("🔄 Rotando 45° a la izquierda...")
+                    mc.turn_left(45, rate=45)
+                elif key == '\x1b[C' and volando:
+                    print("🔄 Rotando 45° a la derecha...")
+                    mc.turn_right(45, rate=45)
+                elif key.lower() == 'q':
+                    print("\033[1;31m💀 [Q] ¡CORTANDO MOTORES! ¡CAÍDA LIBRE!\033[0m")
+                    scf.cf.commander.send_stop_setpoint()
+                    break
+                elif key == '\x03': 
+                    print("\nSaliendo...")
+                    if volando:
+                        mc.land()
+                    break
+                    
+                rclpy.spin_once(nodo, timeout_sec=0)
+                
+        except Exception as e:
+            print(f"\n\033[1;31mError: {e}\033[0m")
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+            logconf_pose.stop()
+            logconf_sensores.stop()
+            nodo.destroy_node()
+            rclpy.shutdown()
 
 if __name__ == '__main__':
-    main()  
+    main()
