@@ -1,6 +1,7 @@
 import sys
 import termios
 import tty
+import math
 
 import rclpy
 from rclpy.node import Node
@@ -15,7 +16,7 @@ from cflib.positioning.motion_commander import MotionCommander
 URI = 'radio://0/80/2M/E7E7E7E7AA'
 
 MENU_HACKER = """
-\033[1;35m🕹️ TERMINAL DE VUELO + RVIZ2 🕹️\033[0m
+\033[1;35m🕹️ TERMINAL DE VUELO + RVIZ2 + SENSORES Y ÁNGULOS 🕹️\033[0m
 -----------------------------------------
 [\033[1;32mESPACIO\033[0m] : Despegar / Aterrizar
 [\033[1;36mW/S/A/D\033[0m] : Moverse en horizontal (20 cm)
@@ -29,11 +30,32 @@ MENU_HACKER = """
 class NodoPiloto(Node):
     def __init__(self):
         super().__init__('nodo_piloto')
-        # Creamos el publicador para RViz2
         self.pub_pose = self.create_publisher(PoseStamped, '/crazyflie/pose', 10)
+        # Guardamos los ángulos aquí para poder imprimirlos junto con los láseres
+        self.roll = 0.0
+        self.pitch = 0.0
+        self.yaw = 0.0
+
+def euler_a_cuaternion(roll, pitch, yaw):
+    r = math.radians(roll)
+    p = math.radians(pitch)
+    y = math.radians(yaw)
+    
+    cr = math.cos(r * 0.5)
+    sr = math.sin(r * 0.5)
+    cp = math.cos(p * 0.5)
+    sp = math.sin(p * 0.5)
+    cy = math.cos(y * 0.5)
+    sy = math.sin(y * 0.5)
+    
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    qw = cr * cp * cy + sr * sp * sy
+    
+    return qx, qy, qz, qw
 
 def get_key(settings):
-    """Secuestra la terminal para leer teclas al instante."""
     tty.setraw(sys.stdin.fileno())
     key = sys.stdin.read(1)
     if key == '\x1b':
@@ -54,31 +76,63 @@ def main(args=None):
         print("\033[1;32m¡Enlace de radio establecido!\033[0m")
         print(MENU_HACKER)
         
-        # --- CONFIGURACIÓN DE TELEMETRÍA PARA RVIZ2 ---
-        logconf = LogConfig(name='Pose', period_in_ms=100) # 10 Hz
-        logconf.add_variable('stateEstimate.x', 'float')
-        logconf.add_variable('stateEstimate.y', 'float')
-        logconf.add_variable('stateEstimate.z', 'float')
+        # --- 1. CONFIGURACIÓN DE TELEMETRÍA PARA RVIZ2 Y ÁNGULOS ---
+        logconf_pose = LogConfig(name='Pose', period_in_ms=100)
+        logconf_pose.add_variable('stateEstimate.x', 'float')
+        logconf_pose.add_variable('stateEstimate.y', 'float')
+        logconf_pose.add_variable('stateEstimate.z', 'float')
+        logconf_pose.add_variable('stateEstimate.roll', 'float')
+        logconf_pose.add_variable('stateEstimate.pitch', 'float')
+        logconf_pose.add_variable('stateEstimate.yaw', 'float')
         
-        def on_tele(timestamp, data, _cfg):
+        def on_pose_data(timestamp, data, _cfg):
+            # Actualizamos los ángulos internos del nodo para la consola
+            nodo.roll = data['stateEstimate.roll']
+            nodo.pitch = data['stateEstimate.pitch']
+            nodo.yaw = data['stateEstimate.yaw']
+            
             msg = PoseStamped()
             msg.header.stamp = nodo.get_clock().now().to_msg()
-            msg.header.frame_id = "world" # Referencia obligatoria para RViz
+            msg.header.frame_id = "world"
             
-            # Pasamos las coordenadas
             msg.pose.position.x = data['stateEstimate.x']
             msg.pose.position.y = data['stateEstimate.y']
             msg.pose.position.z = data['stateEstimate.z']
             
-            # Orientación neutra (para ver el punto en 3D es suficiente)
-            msg.pose.orientation.w = 1.0 
+            qx, qy, qz, qw = euler_a_cuaternion(nodo.roll, nodo.pitch, nodo.yaw)
+            msg.pose.orientation.x = qx
+            msg.pose.orientation.y = qy
+            msg.pose.orientation.z = qz
+            msg.pose.orientation.w = qw
             
             nodo.pub_pose.publish(msg)
             
-        scf.cf.log.add_config(logconf)
-        logconf.data_received_cb.add_callback(on_tele)
-        logconf.start()
-        # ----------------------------------------------
+        scf.cf.log.add_config(logconf_pose)
+        logconf_pose.data_received_cb.add_callback(on_pose_data)
+        logconf_pose.start()
+        
+        # --- 2. CONFIGURACIÓN DE SENSORES LÁSER (MULTIRANGER) ---
+        logconf_sensores = LogConfig(name='Multiranger', period_in_ms=100)
+        logconf_sensores.add_variable('range.front', 'uint16_t')
+        logconf_sensores.add_variable('range.back', 'uint16_t')
+        logconf_sensores.add_variable('range.left', 'uint16_t')
+        logconf_sensores.add_variable('range.right', 'uint16_t')
+        logconf_sensores.add_variable('range.up', 'uint16_t')
+        
+        def on_sensores_data(timestamp, data, _cfg):
+            frente = data['range.front']
+            atras = data['range.back']
+            izq = data['range.left']
+            der = data['range.right']
+            arriba = data['range.up']
+            
+            # Imprimimos los ángulos del dron y las distancias láser en una sola línea fluida
+            sys.stdout.write(f"\r\033[K[Ángulos] R:{nodo.roll:6.1f} P:{nodo.pitch:6.1f} Y:{nodo.yaw:6.1f} | [Láser] F:{frente:4} A:{atras:4} I:{izq:4} D:{der:4} Ar:{arriba:4}")
+            sys.stdout.flush()
+
+        scf.cf.log.add_config(logconf_sensores)
+        logconf_sensores.data_received_cb.add_callback(on_sensores_data)
+        logconf_sensores.start()
         
         mc = MotionCommander(scf)
         volando = False
@@ -86,6 +140,7 @@ def main(args=None):
         try:
             while True:
                 key = get_key(settings)
+                print("") 
                 
                 if key == ' ':
                     if not volando:
@@ -131,14 +186,14 @@ def main(args=None):
                         mc.land()
                     break
                     
-                # Procesamos los eventos de ROS 2 para que el publicador no se congele
                 rclpy.spin_once(nodo, timeout_sec=0)
                 
         except Exception as e:
-            print(f"\033[1;31mError: {e}\033[0m")
+            print(f"\n\033[1;31mError: {e}\033[0m")
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-            logconf.stop()
+            logconf_pose.stop()
+            logconf_sensores.stop()
             nodo.destroy_node()
             rclpy.shutdown()
 
