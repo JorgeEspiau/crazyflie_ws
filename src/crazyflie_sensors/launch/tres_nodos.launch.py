@@ -1,4 +1,4 @@
-cat > src/crazyflie_sensors/launch/tres_nodos.launch.py <<'EOF'
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
